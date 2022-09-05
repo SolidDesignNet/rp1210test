@@ -15,7 +15,7 @@ impl Display for J1939Packet {
     fn fmt(&self, f: &mut Formatter) -> Result {
         write!(
             f,
-            "{:12.4} {} [{}]{}{}",
+            "{:12.4} {} [{}] {}{}",
             self.time(),
             self.header(),
             self.length(),
