@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use anyhow::*;
 
 #[derive(Debug)]
@@ -11,6 +13,21 @@ pub struct Rp1210Prod {
     pub id: String,
     pub description: String,
     pub devices: Vec<Rp1210Dev>,
+}
+
+impl Display for Rp1210Dev {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}:{}", self.id, self.name, self.description)
+    }
+}
+impl Display for Rp1210Prod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{} {}", self.id, self.description)?;
+        for d in &self.devices {
+            writeln!(f, "{}", d)?;
+        }
+        std::fmt::Result::Ok(())
+    }
 }
 
 pub fn list_all_products() -> Result<Vec<Rp1210Prod>> {

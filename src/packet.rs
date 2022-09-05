@@ -5,7 +5,7 @@ pub struct Packet {
     pub data: Vec<u8>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct J1939Packet {
     pub packet: Packet,
     pub tx: bool,
@@ -125,10 +125,10 @@ impl J1939Packet {
         )
     }
     pub fn data_str(&self) -> String {
-        as_hex(&self.packet.data[..])
+        as_hex(&self.data())
     }
 
     pub fn data(&self) -> &[u8] {
-        &self.packet.data[6..]
+        &self.packet.data[11..]
     }
 }

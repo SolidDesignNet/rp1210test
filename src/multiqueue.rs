@@ -68,7 +68,7 @@ where
     }
 
     pub fn iter(&self) -> impl Iterator<Item = T> {
-        self.iter_for(Duration::from_secs(0))
+        self.iter_for(Duration::from_secs(60 * 60 * 24))
     }
 
     pub fn push(&mut self, item: T) {

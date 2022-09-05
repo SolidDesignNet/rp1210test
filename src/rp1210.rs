@@ -6,8 +6,8 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::Duration;
 
-use crate::j1939::packet::*;
 use crate::multiqueue::*;
+use crate::packet::*;
 use libloading::os::windows::Symbol as WinSymbol;
 
 pub const PACKET_SIZE: usize = 1600;
@@ -81,24 +81,29 @@ impl Rp1210 {
         })
     }
     // load DLL, make connection and background thread to read all packets into queue
-    pub fn run(mut self, dev: i16, connection: &str, address: u8) -> Result<Box<dyn Fn() -> ()>> {
+    pub fn run(&mut self, dev: i16, connection: &str, address: u8) -> Result<Box<dyn Fn() -> ()>> {
         self.running.store(true, Relaxed);
         let stopper = self.running.clone();
-        let id = self.client_connect(dev, connection, address)?;
+        let id = self.client_connect(dev, connection, address).unwrap();
+        let read = *self.read_fn;
+        let error_fn = *self.get_error_fn;
+        let mut bus = self.bus.clone();
+
+        let running = self.running.clone();
         std::thread::spawn(move || {
             let mut buf: [u8; PACKET_SIZE] = [0; PACKET_SIZE];
-            while self.running.load(Relaxed) {
-                let size = unsafe { (*self.read_fn)(id, buf.as_mut_ptr(), PACKET_SIZE as i16, 1) };
+            while running.load(Relaxed) {
+                let size = unsafe { read(id, buf.as_mut_ptr(), PACKET_SIZE as i16, 1) };
                 if size >= 0 {
                     let packet = J1939Packet::new_rp1210(&buf[0..size as usize]);
-                    self.bus.push(packet)
+                    bus.push(packet)
                 } else {
                     if size < 0 {
                         // read error
                         let code = -size;
-                        let size = unsafe { (*self.get_error_fn)(code, buf.as_mut_ptr()) } as usize;
+                        let size = unsafe { error_fn(code, buf.as_mut_ptr()) } as usize;
                         let msg = String::from_utf8_lossy(&buf[0..size]).to_string();
-                        println!("RP1210 error: {}: {:?}", code, msg);
+                        println!("RP1210 error: {}: {}", code, msg);
                     }
                     std::thread::sleep(Duration::from_millis(1));
                 }

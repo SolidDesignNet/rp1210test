@@ -19,20 +19,39 @@ pub fn main() -> Result<(), Error> {
     //create abstract CAN bus
     let bus: MultiQueue<J1939Packet> = MultiQueue::new();
 
+    if args.len() < 4 {
+        match args[1].as_str() {
+            "list" => {
+                println!();
+                for n in rp1210_parsing::list_all_products()? {
+                    println!("{}", n)
+                }
+                usage(args[0].as_str());
+                return Ok(());
+            }
+            &_ => {
+                usage(args[0].as_str());
+                return Err(Error::msg("Invalid parameters"));
+            }
+        }
+    }
+
     // UI
     // create a new adapter
     let adapter = args[1].as_str();
     let dev = args[2].parse()?;
-    let address = args[3].parse()?;
+    let address = u8::from_str_radix(args[3].as_str(), 16)?;
 
     let mut rp1210 = Rp1210::new(&adapter, bus.clone())?;
-    let closer = rp1210.run(dev, "J1939:Baud=Auto", address)?;
+    let closer = rp1210.run(dev, "J1939:Baud=500", address)?;
 
     let command: &str = args[4].as_str();
     match command {
         "log" => {
             // log everything
-            bus.iter().for_each(|p| println!("{}", p));
+            loop {
+                bus.iter().for_each(|p| println!("{}", p));
+            }
         }
         "server" => {
             let addr: u32 = args[4].parse()?;
@@ -97,14 +116,18 @@ pub fn main() -> Result<(), Error> {
         }
         &_ => {
             println!("Unknown command: {}", command);
-            println!(
-                "Usage {} {{adapter}} {{device}} {{address}} (log|server|(ping|rx|tx {{dest}} {{count}})",
-                args[0]
-            );
+            usage(args[0].as_str());
         }
     }
     closer();
     Ok(())
+}
+
+fn usage(name: &str) {
+    println!(
+        "Usage {} {{adapter}} {{device}} {{address}} (log|server|(ping|rx|tx {{dest}} {{count}})",
+        name
+    );
 }
 
 fn tx(rp1210: &Rp1210, dest: u8, count: u64) -> Result<(), Error> {
