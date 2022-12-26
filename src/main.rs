@@ -42,11 +42,7 @@ fn hex(str: &str) -> Result<u8, std::num::ParseIntError> {
 impl Connection {
     fn connect(&self, bus: &MultiQueue<J1939Packet>) -> Result<(Rp1210, Box<dyn Fn()>), Error> {
         let mut rp1210 = Rp1210::new(&self.adapter, bus.clone())?;
-        let closer = rp1210.run(
-            self.device as i16,
-            &self.connection_string.clone(),
-            self.address,
-        )?;
+        let closer = rp1210.run(self.device as i16, &self.connection_string, self.address)?;
         Ok((rp1210, closer))
     }
 }
@@ -96,6 +92,7 @@ pub fn main() -> Result<(), Error> {
             }
         }
         RPCommand::Log(connection) => {
+            let _rp1210 = connection.connect(&bus);
             let mut count: u64 = 0;
             let mut start = SystemTime::now();
             bus.iter().for_each(|p| {
@@ -111,7 +108,7 @@ pub fn main() -> Result<(), Error> {
         }
 
         RPCommand::Server(connection) => {
-            let (rp1210, closer) = connection.connect(&bus).unwrap();
+            let (rp1210, _closer) = connection.connect(&bus).unwrap();
             // respond to a ping
             bus.iter().for_each(|p| {
                 match p.data()[0] {
@@ -147,7 +144,7 @@ pub fn main() -> Result<(), Error> {
             dest,
             count,
         } => {
-            let (rp1210, closer) = connection.connect(&bus).unwrap();
+            let (rp1210, _closer) = connection.connect(&bus).unwrap();
 
             let id = 0x18_FFAA_00 | (dest as u32);
             let mut buf = [0 as u8; 8];
@@ -176,7 +173,7 @@ pub fn main() -> Result<(), Error> {
             dest,
             count,
         } => {
-            let (rp1210, closer) = connection.connect(&bus).unwrap();
+            let (rp1210, _closer) = connection.connect(&bus).unwrap();
             let rx_packets = bus.iter();
 
             let request = or([TX_CMD, 0, 0, 0, 0, 0, 0, 0], count);
@@ -189,13 +186,12 @@ pub fn main() -> Result<(), Error> {
             dest,
             count,
         } => {
-            let (rp1210, closer) = connection.connect(&bus).unwrap();
+            let (rp1210, _closer) = connection.connect(&bus).unwrap();
             let request = or([RX_CMD, 0, 0, 0, 0, 0, 0, 0], count);
             rp1210.send(&J1939Packet::new(0x18_FFAA_00 | (dest as u32), &request))?;
 
             tx(&rp1210, dest, count)?;
         }
-        RPCommand::List => {}
     }
     // FIXME
     //    closer();

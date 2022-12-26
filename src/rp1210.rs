@@ -11,6 +11,7 @@ use libloading::os::windows::Symbol as WinSymbol;
 
 pub const PACKET_SIZE: usize = 1600;
 
+#[allow(dead_code)]
 fn log<F, T>(msg: &str, mut f: F) -> T
 where
     F: FnMut() -> T,
