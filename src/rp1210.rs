@@ -4,7 +4,6 @@ use std::ffi::CString;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::*;
 use std::sync::*;
-use std::time::Duration;
 
 use crate::multiqueue::*;
 use crate::packet::*;
@@ -33,7 +32,7 @@ type _VERSION = unsafe extern "stdcall" fn(i16, *const u8, i16, i16) -> i16;
 type GetErrorType = unsafe extern "stdcall" fn(i16, *const u8) -> i16;
 
 pub struct Rp1210 {
-    lib: Library,
+    _lib: Library,
     bus: MultiQueue<J1939Packet>,
     running: Arc<AtomicBool>,
     id: i16,
@@ -43,17 +42,6 @@ pub struct Rp1210 {
     read_fn: WinSymbol<ReadType>,
     send_command_fn: WinSymbol<CommandType>,
     get_error_fn: WinSymbol<GetErrorType>,
-    /*
-      short RP1210_GetErrorMsg(short errCode, byte[] fpchMessage);
-      short RP1210_ReadMessage(short nClientID, byte[] fpchAPIMessage, short nBufferSize, short nBlockOnSend);
-      short RP1210_SendCommand(short nCommandNumber, short nClientID, byte[] fpchClientCommand, short nMessageSize);
-      short RP1210_SendMessage(short nClientID,
-                             byte[] fpchClientMessage,
-                             short nMessageSize,
-                             short nNotifyStatusOnTx,
-                             short nBlockOnSend);
-
-    */
 }
 
 #[allow(dead_code)]
@@ -76,7 +64,7 @@ impl Rp1210 {
                 read_fn: read.into_raw(),
                 send_command_fn: send_command.into_raw(),
                 get_error_fn: get_error.into_raw(),
-                lib,
+                _lib: lib,
             }
         })
     }
@@ -95,8 +83,7 @@ impl Rp1210 {
             while running.load(Relaxed) {
                 let size = unsafe { read(id, buf.as_mut_ptr(), PACKET_SIZE as i16, 1) };
                 if size >= 0 {
-                    let packet = J1939Packet::new_rp1210(&buf[0..size as usize]);
-                    bus.push(packet)
+                    bus.push(J1939Packet::new_rp1210(&buf[0..size as usize]))
                 } else {
                     if size < 0 {
                         // read error
@@ -105,7 +92,7 @@ impl Rp1210 {
                         let msg = String::from_utf8_lossy(&buf[0..size]).to_string();
                         println!("RP1210 error: {}: {}", code, msg);
                     }
-                    std::thread::sleep(Duration::from_millis(1));
+                    std::thread::yield_now();
                 }
             }
         });
@@ -139,17 +126,27 @@ impl Rp1210 {
         address: u8,
     ) -> Result<i16> {
         let c_to_print = CString::new(connection_string).expect("CString::new failed");
+        let app_packetize = true;
         let id = unsafe {
-            (self.client_connect_fn)(0, dev_id, c_to_print.as_ptr() as *const char, 0, 0, 0)
+            (self.client_connect_fn)(
+                0,
+                dev_id,
+                c_to_print.as_ptr() as *const char,
+                0,
+                0,
+                if app_packetize { 1 } else { 0 },
+            )
         };
         println!("client_connect id {}", id);
         self.id = self.verify_return(id)?;
-        self.send_command(
-            /*CMD_PROTECT_J1939_ADDRESS*/ 19,
-            vec![
-                address, 0, 0, 0xE0, 0xFF, 0, 0x81, 0, 0, /*CLAIM_BLOCK_UNTIL_DONE*/ 0,
-            ],
-        )?;
+        if !app_packetize {
+            self.send_command(
+                /*CMD_PROTECT_J1939_ADDRESS*/ 19,
+                vec![
+                    address, 0, 0, 0xE0, 0xFF, 0, 0x81, 0, 0, /*CLAIM_BLOCK_UNTIL_DONE*/ 0,
+                ],
+            )?;
+        }
         self.send_command(
             /*CMD_ECHO_TRANSMITTED_MESSAGES*/ 16,
             vec![/*ECHO_ON*/ 1],

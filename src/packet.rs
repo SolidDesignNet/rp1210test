@@ -129,6 +129,27 @@ impl J1939Packet {
     }
 
     pub fn data(&self) -> &[u8] {
-        &self.packet.data[11..]
+        &self.packet.data[self.offset() + 6..]
+    }
+}
+#[cfg(test)]
+mod tests {
+    // Note this useful idiom: importing names from outer (for mod tests) scope.
+    use super::*;
+
+    #[test]
+    fn test_j1939packet_display() {
+        assert_eq!(
+            "      0.0000 18FFAAFA [3] 01 02 03 (TX)",
+            J1939Packet::new(0x18FFAAFA, &[1, 2, 3]).to_string()
+        );
+        assert_eq!(
+            "      0.0000 18FFAAF9 [8] 01 02 03 04 05 06 07 08 (TX)",
+            J1939Packet::new(0x18FFAAF9, &[1, 2, 3, 4, 5, 6, 7, 8]).to_string()
+        );
+        assert_eq!(
+            "      0.0000 18FFAAFB [8] FF 00 FF 00 FF 00 FF 00 (TX)",
+            J1939Packet::new(0x18FFAAFB, &[0xFF, 00, 0xFF, 00, 0xFF, 00, 0xFF, 00]).to_string()
+        );
     }
 }

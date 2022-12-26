@@ -4,6 +4,8 @@ mod packet;
 #[cfg_attr(target_os = "windows", path = "rp1210.rs")]
 mod rp1210;
 mod rp1210_parsing;
+use std::time::{Duration, SystemTime};
+
 use anyhow::Error;
 use multiqueue::*;
 use packet::*;
@@ -12,57 +14,111 @@ use rp1210::*;
 const PING_CMD: u8 = 1;
 const RX_CMD: u8 = 2;
 const TX_CMD: u8 = 3;
+use clap::{Parser, Subcommand};
+
+#[derive(Parser, Debug, Clone)]
+pub struct Connection {
+    #[arg(short, long)]
+    adapter: String,
+    #[arg(short, long)]
+    device: u8,
+    #[arg(short, long)]
+    connection_string: Option<String>,
+    #[arg(long)]
+    address: Option<u8>,
+}
+
+impl Connection {
+    fn connect(&self, bus: &MultiQueue<J1939Packet>) -> Result<(Rp1210, Box<dyn Fn()>), Error> {
+        let mut rp1210 = Rp1210::new(&self.adapter, bus.clone())?;
+        let closer = rp1210.run(
+            self.device as i16,
+            &self
+                .connection_string
+                .unwrap_or("J1939:Baud=Auto".to_string()),
+            self.address(),
+        )?;
+        Ok((rp1210, closer))
+    }
+
+    pub(crate) fn address(&self) -> u8 {
+        self.address.unwrap_or(254)
+    }
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    List,
+    Log(Connection),
+    Server {
+        connection: Connection,
+        dest: u8,
+    },
+    Ping {
+        connection: Connection,
+        dest: u8,
+        count: u64,
+    },
+    Tx {
+        connection: Connection,
+        dest: u8,
+        count: u64,
+    },
+    Rx {
+        connection: Connection,
+        dest: u8,
+        count: u64,
+    },
+}
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[command(subcommand)]
+    command: Command,
+}
 
 pub fn main() -> Result<(), Error> {
-    let args: Vec<String> = std::env::args().collect();
+    let args = Args::parse();
 
     //create abstract CAN bus
     let bus: MultiQueue<J1939Packet> = MultiQueue::new();
 
-    if args.len() < 4 {
-        match args[1].as_str() {
-            "list" => {
-                println!();
-                for n in rp1210_parsing::list_all_products()? {
-                    println!("{}", n)
-                }
-                usage(args[0].as_str());
-                return Ok(());
-            }
-            &_ => {
-                usage(args[0].as_str());
-                return Err(Error::msg("Invalid parameters"));
+    match args.command {
+        Command::List => {
+            println!();
+            for n in rp1210_parsing::list_all_products()? {
+                println!("{}", n)
             }
         }
-    }
-
-    // UI
-    // create a new adapter
-    let adapter = args[1].as_str();
-    let dev = args[2].parse()?;
-    let address = u8::from_str_radix(args[3].as_str(), 16)?;
-
-    let mut rp1210 = Rp1210::new(&adapter, bus.clone())?;
-    let closer = rp1210.run(dev, "J1939:Baud=500", address)?;
-
-    let command: &str = args[4].as_str();
-    match command {
-        "log" => {
-            // log everything
-            loop {
-                bus.iter().for_each(|p| println!("{}", p));
-            }
-        }
-        "server" => {
-            let addr: u32 = args[4].parse()?;
-            // respond to a ping
+        Command::Log(adapter) => {
+            let mut count: u64 = 0;
+            let mut start = SystemTime::now();
             bus.iter().for_each(|p| {
+                println!("{}", p);
+                count += 1;
+                let millis = start.elapsed().unwrap().as_millis();
+                if millis > 10000 {
+                    eprintln!("{} packet/s", 1000 * count / millis as u64);
+                    start = SystemTime::now();
+                    count = 0;
+                }
+            });
+        }
+
+        Command::Server { connection, dest } => {
+            let (rp1210, closer) = connection.connect(&bus).unwrap();
+            // respond to a ping
+            bus.iter().filter(|p| p.source() == dest).for_each(|p| {
                 match p.data()[0] {
                     PING_CMD => {
                         // pong
                         rp1210
-                            .send(&J1939Packet::new(0x18FFFF00 | addr, &p.data()))
-                            .expect("what?");
+                            .send(&J1939Packet::new(
+                                0x18FFFF00 | connection.address() as u32,
+                                &p.data(),
+                            ))
+                            .unwrap();
                     }
                     RX_CMD => {
                         // receive sequence
@@ -80,24 +136,43 @@ pub fn main() -> Result<(), Error> {
                     }
                 }
             });
+            eprintln!("Server exited!");
         }
-        "ping" => {
-            let dest: u32 = args[5].parse()?;
-            let id = 0x18_FFAA_00 | dest;
+        Command::Ping {
+            connection,
+            dest,
+            count,
+        } => {
+            let (rp1210, closer) = connection.connect(&bus).unwrap();
 
-            let count: u8 = args[6].parse()?;
+            let id = 0x18_FFAA_00 | (dest as u32);
             let mut buf = [0 as u8; 8];
+            buf[0] = PING_CMD;
             let len = buf.len();
+            eprintln!("buf1 {:?}", buf);
             for i in 1..count {
                 let i_as_bytes = i.to_be_bytes();
                 buf[(len - i_as_bytes.len())..len].copy_from_slice(&i_as_bytes);
-                rp1210.send(&J1939Packet::new(id, &buf))?;
+                eprintln!("buf2 {:?}", buf);
+                let ping = J1939Packet::new(id, &buf);
+                eprintln!("ping {}", ping);
+
+                let start = SystemTime::now();
+                let mut i = bus.iter_for(Duration::from_secs(2));
+                rp1210.send(&ping)?;
+                let pong = i.find(|p| p.source() == dest && p.data()[0] == PING_CMD);
+                match pong {
+                    Some(p) => eprintln!("{} -> {:?} in {:?}", ping, p, start.elapsed()),
+                    None => eprintln!("{} no response in {:?}", ping, start.elapsed()),
+                }
             }
         }
-        "rx" => {
-            let dest: u8 = args[5].parse()?;
-            let count = args[6].parse()?;
-
+        Command::Rx {
+            connection,
+            dest,
+            count,
+        } => {
+            let (rp1210, closer) = connection.connect(&bus).unwrap();
             let rx_packets = bus.iter();
 
             let request = or([TX_CMD, 0, 0, 0, 0, 0, 0, 0], count);
@@ -105,29 +180,22 @@ pub fn main() -> Result<(), Error> {
 
             rx(rx_packets, dest, count)?;
         }
-        "tx" => {
-            let dest: u8 = args[5].parse()?;
-            let count = args[6].parse()?;
-
+        Command::Tx {
+            connection,
+            dest,
+            count,
+        } => {
+            let (rp1210, closer) = connection.connect(&bus).unwrap();
             let request = or([RX_CMD, 0, 0, 0, 0, 0, 0, 0], count);
             rp1210.send(&J1939Packet::new(0x18_FFAA_00 | (dest as u32), &request))?;
 
             tx(&rp1210, dest, count)?;
         }
-        &_ => {
-            println!("Unknown command: {}", command);
-            usage(args[0].as_str());
-        }
+        Command::List => {}
     }
-    closer();
+    // FIXME
+    //    closer();
     Ok(())
-}
-
-fn usage(name: &str) {
-    println!(
-        "Usage {} {{adapter}} {{device}} {{address}} (log|server|(ping|rx|tx {{dest}} {{count}})",
-        name
-    );
 }
 
 fn tx(rp1210: &Rp1210, dest: u8, count: u64) -> Result<(), Error> {
