@@ -6,12 +6,12 @@ joe@think:~/rp1210test$ target/debug/rp1210test
 Usage: rp1210test <COMMAND>
 
 Commands:
-  list    
-  log     
-  server  
-  ping    
-  tx      
-  rx      
+  list    List available RP1210 adapters
+  log     Log all traffic on specified adapter
+  server  Respond to commands from other instances of rp1210test
+  ping    Test latency
+  tx      Test sending bandwidth
+  rx      Test receiving bandwidth
   help    Print this message or the help of the given subcommand(s)
 
 Options:
