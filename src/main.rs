@@ -14,18 +14,18 @@ use rp1210::*;
 const PING_CMD: u8 = 1;
 const RX_CMD: u8 = 2;
 const TX_CMD: u8 = 3;
-use clap::{Parser, Subcommand};
+use clap::{arg, Parser};
 
-#[derive(Parser, Debug, Clone)]
-pub struct Connection {
+#[derive(Parser, Debug, Default, Clone)]
+struct Connection {
     #[arg(short, long)]
     adapter: String,
     #[arg(short, long)]
     device: u8,
-    #[arg(short, long)]
-    connection_string: Option<String>,
-    #[arg(long)]
-    address: Option<u8>,
+    #[arg(long, default_value = "J1939:Baud=Auto")]
+    connection_string: String,
+    #[arg(long, default_value = "254")]
+    address: u8,
 }
 
 impl Connection {
@@ -33,65 +33,58 @@ impl Connection {
         let mut rp1210 = Rp1210::new(&self.adapter, bus.clone())?;
         let closer = rp1210.run(
             self.device as i16,
-            &self
-                .connection_string
-                .unwrap_or("J1939:Baud=Auto".to_string()),
-            self.address(),
+            &self.connection_string.clone(),
+            self.address,
         )?;
         Ok((rp1210, closer))
     }
-
-    pub(crate) fn address(&self) -> u8 {
-        self.address.unwrap_or(254)
-    }
 }
 
-#[derive(Subcommand, Debug)]
-enum Command {
+#[derive(Parser, Debug, Clone)]
+enum RPCommand {
     List,
     Log(Connection),
-    Server {
-        connection: Connection,
-        dest: u8,
-    },
+    Server(Connection),
     Ping {
+        #[command(flatten)]
         connection: Connection,
+        #[arg(long)]
         dest: u8,
+        #[arg(short, long)]
         count: u64,
     },
     Tx {
+        #[command(flatten)]
         connection: Connection,
+        #[arg(long)]
         dest: u8,
+        #[arg(short, long)]
         count: u64,
     },
     Rx {
+        #[command(flatten)]
         connection: Connection,
+        #[arg(long)]
         dest: u8,
+        #[arg(short, long)]
         count: u64,
     },
 }
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    #[command(subcommand)]
-    command: Command,
-}
-
 pub fn main() -> Result<(), Error> {
-    let args = Args::parse();
+    let args = RPCommand::parse();
 
     //create abstract CAN bus
     let bus: MultiQueue<J1939Packet> = MultiQueue::new();
 
-    match args.command {
-        Command::List => {
+    match args {
+        RPCommand::List => {
             println!();
             for n in rp1210_parsing::list_all_products()? {
                 println!("{}", n)
             }
         }
-        Command::Log(adapter) => {
+        RPCommand::Log(connection) => {
             let mut count: u64 = 0;
             let mut start = SystemTime::now();
             bus.iter().for_each(|p| {
@@ -106,16 +99,16 @@ pub fn main() -> Result<(), Error> {
             });
         }
 
-        Command::Server { connection, dest } => {
+        RPCommand::Server(connection) => {
             let (rp1210, closer) = connection.connect(&bus).unwrap();
             // respond to a ping
-            bus.iter().filter(|p| p.source() == dest).for_each(|p| {
+            bus.iter().for_each(|p| {
                 match p.data()[0] {
                     PING_CMD => {
                         // pong
                         rp1210
                             .send(&J1939Packet::new(
-                                0x18FFFF00 | connection.address() as u32,
+                                0x18FFFF00 | connection.address as u32,
                                 &p.data(),
                             ))
                             .unwrap();
@@ -138,7 +131,7 @@ pub fn main() -> Result<(), Error> {
             });
             eprintln!("Server exited!");
         }
-        Command::Ping {
+        RPCommand::Ping {
             connection,
             dest,
             count,
@@ -167,7 +160,7 @@ pub fn main() -> Result<(), Error> {
                 }
             }
         }
-        Command::Rx {
+        RPCommand::Rx {
             connection,
             dest,
             count,
@@ -180,7 +173,7 @@ pub fn main() -> Result<(), Error> {
 
             rx(rx_packets, dest, count)?;
         }
-        Command::Tx {
+        RPCommand::Tx {
             connection,
             dest,
             count,
@@ -191,7 +184,7 @@ pub fn main() -> Result<(), Error> {
 
             tx(&rp1210, dest, count)?;
         }
-        Command::List => {}
+        RPCommand::List => {}
     }
     // FIXME
     //    closer();
