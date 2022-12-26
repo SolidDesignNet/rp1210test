@@ -19,13 +19,24 @@ use clap::{arg, Parser};
 #[derive(Parser, Debug, Default, Clone)]
 struct Connection {
     #[arg(short, long)]
+    /// RP1210 Adapter Identifier
     adapter: String,
+
     #[arg(short, long)]
+    /// RP1210 Device ID
     device: u8,
+
     #[arg(long, default_value = "J1939:Baud=Auto")]
+    /// RP1210 Connection String
     connection_string: String,
-    #[arg(long, default_value = "254")]
+
+    #[arg(long, default_value = "F9",value_parser=hex)]
+    /// RP1210 Adapter Address (used for packets send and transport protocol)
     address: u8,
+}
+
+fn hex(str: &str) -> Result<u8, std::num::ParseIntError> {
+    u8::from_str_radix(str, 16)
 }
 
 impl Connection {
@@ -48,7 +59,7 @@ enum RPCommand {
     Ping {
         #[command(flatten)]
         connection: Connection,
-        #[arg(long)]
+        #[arg(long, default_value = "00",value_parser=hex)]
         dest: u8,
         #[arg(short, long)]
         count: u64,
@@ -56,7 +67,7 @@ enum RPCommand {
     Tx {
         #[command(flatten)]
         connection: Connection,
-        #[arg(long)]
+        #[arg(long, default_value = "00",value_parser=hex)]
         dest: u8,
         #[arg(short, long)]
         count: u64,
@@ -64,7 +75,7 @@ enum RPCommand {
     Rx {
         #[command(flatten)]
         connection: Connection,
-        #[arg(long)]
+        #[arg(long, default_value = "00",value_parser=hex)]
         dest: u8,
         #[arg(short, long)]
         count: u64,
