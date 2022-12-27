@@ -50,8 +50,14 @@ impl Connection {
 #[derive(Parser, Debug, Clone)]
 enum RPCommand {
     List,
-    Log(Connection),
-    Server(Connection),
+    Log {
+        #[command(flatten)]
+        connection: Connection,
+    },
+    Server {
+        #[command(flatten)]
+        connection: Connection,
+    },
     Ping {
         #[command(flatten)]
         connection: Connection,
@@ -91,7 +97,7 @@ pub fn main() -> Result<(), Error> {
                 println!("{}", n)
             }
         }
-        RPCommand::Log(connection) => {
+        RPCommand::Log { connection } => {
             let _rp1210 = connection.connect(&bus);
             let mut count: u64 = 0;
             let mut start = SystemTime::now();
@@ -107,36 +113,41 @@ pub fn main() -> Result<(), Error> {
             });
         }
 
-        RPCommand::Server(connection) => {
+        RPCommand::Server { connection } => {
             let (rp1210, _closer) = connection.connect(&bus).unwrap();
             // respond to a ping
-            bus.iter().for_each(|p| {
-                match p.data()[0] {
-                    PING_CMD => {
-                        // pong
-                        rp1210
-                            .send(&J1939Packet::new(
-                                0x18FFFF00 | connection.address as u32,
-                                &p.data(),
-                            ))
-                            .unwrap();
+            bus.iter()
+                .filter(|p| p.pgn() == 0xFFAA)
+                .for_each(|p| {
+                    match p.data()[0] {
+                        PING_CMD => {
+                            println!("PING");
+                            // pong
+                            rp1210
+                                .send(&J1939Packet::new(
+                                    0x18FFFF00 | connection.address as u32,
+                                    &p.data(),
+                                ))
+                                .unwrap();
+                        }
+                        RX_CMD => {
+                            println!("RX");
+                            // receive sequence
+                            let count = to_u64(p.data()) & 0xFFFFFF_FFFFFFFF;
+                            let rx_packets = bus.iter();
+                            rx(rx_packets, p.source(), count).unwrap();
+                        }
+                        TX_CMD => {
+                            println!("TX");
+                            // send sequence
+                            let count = to_u64(p.data()) & 0xFFFFFF_FFFFFFFF;
+                            tx(&rp1210, p.source(), count).unwrap();
+                        }
+                        _ => {
+                            //                        println!("Unknown command: {}", p);
+                        }
                     }
-                    RX_CMD => {
-                        // receive sequence
-                        let count = to_u64(p.data()) & 0xFFFFFF_FFFFFFFF;
-                        let rx_packets = bus.iter();
-                        rx(rx_packets, p.source(), count).unwrap();
-                    }
-                    TX_CMD => {
-                        // send sequence
-                        let count = to_u64(p.data()) & 0xFFFFFF_FFFFFFFF;
-                        tx(&rp1210, p.source(), count).unwrap();
-                    }
-                    _ => {
-                        println!("Unknown command: {}", p);
-                    }
-                }
-            });
+                });
             eprintln!("Server exited!");
         }
         RPCommand::Ping {
@@ -163,7 +174,7 @@ pub fn main() -> Result<(), Error> {
                 rp1210.send(&ping)?;
                 let pong = i.find(|p| p.source() == dest && p.data()[0] == PING_CMD);
                 match pong {
-                    Some(p) => eprintln!("{} -> {:?} in {:?}", ping, p, start.elapsed()),
+                    Some(p) => eprintln!("{} -> {} in {:?}", ping, p, start.elapsed()),
                     None => eprintln!("{} no response in {:?}", ping, start.elapsed()),
                 }
             }
