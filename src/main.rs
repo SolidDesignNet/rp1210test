@@ -49,9 +49,13 @@ impl Connection {
 
 #[derive(Parser, Debug, Clone)]
 enum RPCommand {
+    /// List available RP1210 adapters
     List,
+    /// Log all traffic on specified adapter
     Log(Connection),
+    /// Respond to commands from other instances of rp1210test
     Server(Connection),
+    /// Test latency
     Ping {
         #[command(flatten)]
         connection: Connection,
@@ -60,6 +64,7 @@ enum RPCommand {
         #[arg(short, long)]
         count: u64,
     },
+    /// Test sending bandwidth
     Tx {
         #[command(flatten)]
         connection: Connection,
@@ -68,6 +73,7 @@ enum RPCommand {
         #[arg(short, long)]
         count: u64,
     },
+    /// Test receiving bandwidth
     Rx {
         #[command(flatten)]
         connection: Connection,
