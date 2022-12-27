@@ -52,9 +52,15 @@ enum RPCommand {
     /// List available RP1210 adapters
     List,
     /// Log all traffic on specified adapter
-    Log(Connection),
+    Log {
+        #[command(flatten)]
+        connection: Connection,
+    },
     /// Respond to commands from other instances of rp1210test
-    Server(Connection),
+    Server {
+        #[command(flatten)]
+        connection: Connection,
+    },
     /// Test latency
     Ping {
         #[command(flatten)]
@@ -97,7 +103,7 @@ pub fn main() -> Result<(), Error> {
                 println!("{}", n)
             }
         }
-        RPCommand::Log(connection) => {
+        RPCommand::Log { connection } => {
             let _rp1210 = connection.connect(&bus);
             let mut count: u64 = 0;
             let mut start = SystemTime::now();
@@ -113,12 +119,13 @@ pub fn main() -> Result<(), Error> {
             });
         }
 
-        RPCommand::Server(connection) => {
+        RPCommand::Server { connection } => {
             let (rp1210, _closer) = connection.connect(&bus).unwrap();
             // respond to a ping
-            bus.iter().for_each(|p| {
+            bus.iter().filter(|p| p.pgn() == 0xFFAA).for_each(|p| {
                 match p.data()[0] {
                     PING_CMD => {
+                        println!("PING");
                         // pong
                         rp1210
                             .send(&J1939Packet::new(
@@ -128,18 +135,20 @@ pub fn main() -> Result<(), Error> {
                             .unwrap();
                     }
                     RX_CMD => {
+                        println!("RX");
                         // receive sequence
                         let count = to_u64(p.data()) & 0xFFFFFF_FFFFFFFF;
                         let rx_packets = bus.iter();
                         rx(rx_packets, p.source(), count).unwrap();
                     }
                     TX_CMD => {
+                        println!("TX");
                         // send sequence
                         let count = to_u64(p.data()) & 0xFFFFFF_FFFFFFFF;
                         tx(&rp1210, p.source(), count).unwrap();
                     }
                     _ => {
-                        println!("Unknown command: {}", p);
+                        //                        println!("Unknown command: {}", p);
                     }
                 }
             });
@@ -169,7 +178,7 @@ pub fn main() -> Result<(), Error> {
                 rp1210.send(&ping)?;
                 let pong = i.find(|p| p.source() == dest && p.data()[0] == PING_CMD);
                 match pong {
-                    Some(p) => eprintln!("{} -> {:?} in {:?}", ping, p, start.elapsed()),
+                    Some(p) => eprintln!("{} -> {} in {:?}", ping, p, start.elapsed()),
                     None => eprintln!("{} no response in {:?}", ping, start.elapsed()),
                 }
             }
