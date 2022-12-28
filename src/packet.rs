@@ -62,6 +62,13 @@ impl J1939Packet {
         self.packet.data.len() - 6 - self.offset()
     }
 
+    pub fn new_packet(priority: u8, pgn: u32, da: u8, sa: u8, data: &[u8]) -> J1939Packet {
+        let da = if pgn >= 0xF000 { 0 } else { da };
+        Self::new(
+            ((priority as u32) << 24) | (pgn << 8) | ((da as u32) << 8) | (sa as u32),
+            data,
+        )
+    }
     #[allow(dead_code)]
     pub fn new(head: u32, data: &[u8]) -> J1939Packet {
         let pgn = 0xFFFF & (head >> 8);
