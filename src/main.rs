@@ -18,11 +18,9 @@ use clap::{arg, Parser};
 
 #[derive(Parser, Debug, Default, Clone)]
 struct ConnectionDescriptor {
-    #[arg(short, long)]
     /// RP1210 Adapter Identifier
     adapter: String,
 
-    #[arg(short, long)]
     /// RP1210 Device ID
     device: u8,
 
@@ -173,7 +171,7 @@ pub fn main() -> Result<(), Error> {
 
 fn tx_bandwidth(rp1210: &Rp1210, count: u64, pgn: u32, dest: u8) -> Result<(), Error> {
     let request = or([RX_CMD, 0, 0, 0, 0, 0, 0, 0], count);
-    rp1210.send(&J1939Packet::new(0x18_FFAA_00 | (dest as u32), &request))?;
+    rp1210.send(&J1939Packet::new(0x18_FFF1_00 | (dest as u32), &request))?;
     tx(&rp1210, dest, count)?;
     Ok(())
 }
@@ -187,7 +185,7 @@ fn rx_bandwidth(
 ) -> Result<(), Error> {
     let rx_packets = bus.iter();
     let request = or([TX_CMD, 0, 0, 0, 0, 0, 0, 0], count);
-    rp1210.send(&J1939Packet::new(0x18_FFAA_00 | (dest as u32), &request))?;
+    rp1210.send(&J1939Packet::new(0x18_FFF1_00 | (dest as u32), &request))?;
     rx(rx_packets, dest, count)?;
     Ok(())
 }
@@ -202,10 +200,10 @@ fn ping(
 ) -> Result<(), Error> {
     const LEN: usize = 8;
     let mut buf = [0 as u8; LEN];
-    buf[0] = PING_CMD;
     Ok(for i in 1..count {
         let i_as_bytes = i.to_be_bytes();
         buf[(LEN - i_as_bytes.len())..LEN].copy_from_slice(&i_as_bytes);
+        buf[0] = PING_CMD;
 
         let ping = J1939Packet::new_packet(0x18, pgn, dest, address, &buf);
         let start = SystemTime::now();
@@ -219,15 +217,22 @@ fn ping(
 }
 
 fn server(rp1210: &Rp1210, bus: &MultiQueue<J1939Packet>, address: u8, pgn: u32) {
+    println!("SERVER: address: {:02X} pgn: {:04X}", address, pgn);
     bus.iter()
         .filter(|p| p.pgn() == pgn && p.source() != address)
         .for_each(|p| {
             match p.data()[0] {
                 PING_CMD => {
-                    println!("PING");
+                    println!("PING: {:02X} {}", p.source(), p);
                     // pong
                     rp1210
-                        .send(&J1939Packet::new_packet(6, pgn, 0, address, &p.data()))
+                        .send(&J1939Packet::new_packet(
+                            0x18,
+                            pgn,
+                            p.source(),
+                            address,
+                            &p.data(),
+                        ))
                         .unwrap();
                 }
                 RX_CMD => {
@@ -244,7 +249,7 @@ fn server(rp1210: &Rp1210, bus: &MultiQueue<J1939Packet>, address: u8, pgn: u32)
                     tx(&rp1210, p.source(), count).unwrap();
                 }
                 _ => {
-                    //                        println!("Unknown command: {}", p);
+                    println!("Unknown command: {}", p);
                 }
             }
         });
@@ -274,7 +279,7 @@ fn list_adapters() -> Result<(), Error> {
 }
 
 fn tx(rp1210: &Rp1210, dest: u8, count: u64) -> Result<(), Error> {
-    let head = 0x18_FFAA_00 | (dest as u32);
+    let head = 0x18_FFF1_00 | (dest as u32);
     for seq in 0..count {
         rp1210.send(&J1939Packet::new(head, &or([0; 8], seq)))?;
     }
