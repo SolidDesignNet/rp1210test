@@ -200,20 +200,34 @@ fn ping(
 ) -> Result<(), Error> {
     const LEN: usize = 8;
     let mut buf = [0 as u8; LEN];
-    Ok(for i in 1..count {
+    let mut sum = 0.0;
+    let mut min = 0.0;
+    let mut max = 0.0;
+    for i in 1..count {
         let i_as_bytes = i.to_be_bytes();
         buf[(LEN - i_as_bytes.len())..LEN].copy_from_slice(&i_as_bytes);
         buf[0] = PING_CMD;
 
         let ping = J1939Packet::new_packet(0x18, pgn, dest, address, &buf);
-        let start = SystemTime::now();
         let mut stream = bus.iter_for(Duration::from_secs(2));
-        rp1210.send(&ping)?;
+        let echo = rp1210.send(&ping)?;
         match stream.find(|p| p.source() == dest && p.pgn() == pgn && p.data()[0] == PING_CMD) {
-            Some(p) => eprintln!("{} -> {} in {:?}", ping, p, start.elapsed()),
-            None => eprintln!("{} no response in {:?}", ping, start.elapsed()),
+            Some(p) => {
+                let time = p.time() - echo.time();
+                sum += time;
+                if time < min {
+                    min = time;
+                }
+                if time > max {
+                    max = time;
+                }
+                eprintln!("{:?}\t{} -> {}", time, echo, p)
+            }
+            None => eprintln!("{} no response", ping),
         }
-    })
+    }
+    println!("Average: {} max: {} min: {}", sum / count as f64, max, min);
+    Ok(())
 }
 
 fn server(rp1210: &Rp1210, bus: &MultiQueue<J1939Packet>, address: u8, pgn: u32) {
@@ -273,9 +287,10 @@ fn log(bus: &MultiQueue<J1939Packet>) {
 
 fn list_adapters() -> Result<(), Error> {
     println!();
-    Ok(for n in rp1210_parsing::list_all_products()? {
+    for n in rp1210_parsing::list_all_products()? {
         println!("{}", n)
-    })
+    }
+    Ok(())
 }
 
 fn tx(rp1210: &Rp1210, dest: u8, count: u64) -> Result<(), Error> {

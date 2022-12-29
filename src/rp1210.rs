@@ -7,6 +7,7 @@ use std::ffi::CString;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::*;
 use std::sync::*;
+use std::time::Duration;
 
 pub const PACKET_SIZE: usize = 1600;
 
@@ -178,10 +179,13 @@ impl Rp1210 {
             .client_connect(dev_id, connection_string, address, true)
     }
 
-    pub fn send(&self, packet: &J1939Packet) -> Result<i16> {
-        self.api
+    pub fn send(&self, packet: &J1939Packet) -> Result<J1939Packet> {
+        let mut stream = self.bus.iter_for(Duration::from_secs(2));
+        let send = self
+            .api
             .lock()
             .expect("Unable to access RP1210 API")
-            .send(packet)
+            .send(packet);
+        send.map(|_| stream.find(move |p| p.data() == packet.data()).unwrap())
     }
 }
