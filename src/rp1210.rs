@@ -129,31 +129,26 @@ impl Rp1210 {
         std::thread::spawn(move || {
             let mut buf: [u8; PACKET_SIZE] = [0; PACKET_SIZE];
             while running.load(Relaxed) {
-                let size = unsafe {
-                    (*api.lock().expect("Unable to access RP1210 API").read_fn)(
-                        id,
-                        buf.as_mut_ptr(),
-                        PACKET_SIZE as i16,
-                        1,
-                    )
-                };
-                if size >= 0 {
-                    bus.push(J1939Packet::new_rp1210(&buf[0..size as usize]))
-                } else {
-                    if size < 0 {
-                        // read error
-                        let code = -size;
-                        let size = unsafe {
-                            (*api
-                                .lock()
-                                .expect("Unable to access RP1210 API")
-                                .get_error_fn)(code, buf.as_mut_ptr())
-                        } as usize;
-                        let msg = String::from_utf8_lossy(&buf[0..size]).to_string();
-                        println!("RP1210 error: {}: {}", code, msg);
+                let api = api.lock().expect("Unable to access RP1210 API");
+                let read = *api.read_fn;
+                loop {
+                    let size = unsafe { read(id, buf.as_mut_ptr(), PACKET_SIZE as i16, 0) };
+                    if size > 0 {
+                        bus.push(J1939Packet::new_rp1210(&buf[0..size as usize]))
+                    } else {
+                        if size < 0 {
+                            // read error
+                            let code = -size;
+                            let size =
+                                unsafe { (*api.get_error_fn)(code, buf.as_mut_ptr()) } as usize;
+                            let msg = String::from_utf8_lossy(&buf[0..size]).to_string();
+                            println!("RP1210 error: {}: {}", code, msg);
+                        }
+                        break;
                     }
-                    std::thread::yield_now();
                 }
+
+                std::thread::yield_now();
             }
         });
         Ok(Box::new(move || stopper.store(false, Relaxed)))
