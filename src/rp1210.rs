@@ -1,13 +1,12 @@
+use crate::multiqueue::*;
+use crate::packet::*;
 use anyhow::*;
+use libloading::os::windows::Symbol as WinSymbol;
 use libloading::*;
 use std::ffi::CString;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::*;
 use std::sync::*;
-
-use crate::multiqueue::*;
-use crate::packet::*;
-use libloading::os::windows::Symbol as WinSymbol;
 
 pub const PACKET_SIZE: usize = 1600;
 
@@ -18,9 +17,18 @@ type CommandType = unsafe extern "stdcall" fn(u16, i16, *const u8, u16) -> i16;
 type _VERSION = unsafe extern "stdcall" fn(i16, *const u8, i16, i16) -> i16;
 type GetErrorType = unsafe extern "stdcall" fn(i16, *const u8) -> i16;
 
+fn log<F, T>(msg: &str, mut f: F) -> T
+where
+    F: FnMut() -> T,
+{
+    let start = std::time::Instant::now();
+    println!("{} start", msg);
+    let rtn = f();
+    println!("{} done {:?}", msg, start.elapsed());
+    rtn
+}
 pub struct Rp1210 {
     bus: MultiQueue<J1939Packet>,
-    running: Arc<AtomicBool>,
     api: Arc<Mutex<API>>,
 }
 struct API {
@@ -72,9 +80,14 @@ impl API {
             Ok(v)
         }
     }
-    fn client_connect(&mut self, dev_id: i16, connection_string: &str, address: u8) -> Result<i16> {
+    fn client_connect(
+        &mut self,
+        dev_id: i16,
+        connection_string: &str,
+        address: u8,
+        app_packetize: bool,
+    ) -> Result<i16> {
         let c_to_print = CString::new(connection_string).expect("CString::new failed");
-        let app_packetize = true;
         let id = unsafe {
             (self.client_connect_fn)(
                 0,
@@ -85,7 +98,6 @@ impl API {
                 if app_packetize { 1 } else { 0 },
             )
         };
-        println!("client_connect id {}", id);
         self.id = self.verify_return(id)?;
         if !app_packetize {
             self.send_command(
@@ -112,51 +124,48 @@ impl API {
 impl Rp1210 {
     pub fn new(id: &str, bus: MultiQueue<J1939Packet>) -> Result<Rp1210> {
         Ok(Rp1210 {
-            running: Arc::new(AtomicBool::new(false)),
             bus: bus.clone(),
             api: Arc::new(Mutex::new(API::new(id)?)),
         })
     }
-    // load DLL, make connection and background thread to read all packets into queue
+    /// load DLL, make connection and background thread to read all packets into queue
     pub fn run(&mut self, dev: i16, connection: &str, address: u8) -> Result<Box<dyn Fn() -> ()>> {
-        self.running.store(true, Relaxed);
-        let stopper = self.running.clone();
+        let closer = Arc::new(AtomicBool::new(true));
         let id = self.client_connect(dev, connection, address).unwrap();
         let mut bus = self.bus.clone();
-
-        let running = self.running.clone();
         let api = self.api.clone();
+        let running = closer.clone();
         std::thread::spawn(move || {
             let mut buf: [u8; PACKET_SIZE] = [0; PACKET_SIZE];
             while running.load(Relaxed) {
-                let api = api.lock().expect("Unable to access RP1210 API");
-                let read = *api.read_fn;
-                loop {
-                    let size = unsafe { read(id, buf.as_mut_ptr(), PACKET_SIZE as i16, 0) };
-                    if size > 0 {
-                        bus.push(J1939Packet::new_rp1210(&buf[0..size as usize]))
-                    } else {
-                        if size < 0 {
-                            // read error
-                            let code = -size;
-                            let size =
-                                unsafe { (*api.get_error_fn)(code, buf.as_mut_ptr()) } as usize;
-                            let msg = String::from_utf8_lossy(&buf[0..size]).to_string();
-                            println!("RP1210 error: {}: {}", code, msg);
+                // lock API, then read as long as there is traffic, then release lock so that sends can be made.
+                {
+                    let api = api.lock().expect("Unable to access RP1210 API");
+                    let read = *api.read_fn;
+                    while running.load(Relaxed) {
+                        let size = unsafe { read(id, buf.as_mut_ptr(), PACKET_SIZE as i16, 0) };
+                        if size > 0 {
+                            bus.push(J1939Packet::new_rp1210(&buf[0..size as usize]))
+                        } else {
+                            if size < 0 {
+                                // read error
+                                let code = -size;
+                                let size =
+                                    unsafe { (*api.get_error_fn)(code, buf.as_mut_ptr()) } as usize;
+                                let msg = String::from_utf8_lossy(&buf[0..size]).to_string();
+                                println!("RP1210 error: {}: {}", code, msg);
+                            }
+                            break;
                         }
-                        break;
                     }
                 }
-
-                std::thread::yield_now();
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                //std::thread::yield_now();
             }
         });
-        Ok(Box::new(move || stopper.store(false, Relaxed)))
+        Ok(Box::new(move || closer.store(false, Relaxed)))
     }
-    pub fn stop(&self) -> Result<()> {
-        self.running.store(false, Relaxed);
-        Ok(())
-    }
+
     pub fn client_connect(
         &mut self,
         dev_id: i16,
@@ -166,7 +175,7 @@ impl Rp1210 {
         self.api
             .lock()
             .expect("Unable to access RP1210 API")
-            .client_connect(dev_id, connection_string, address)
+            .client_connect(dev_id, connection_string, address, true)
     }
 
     pub fn send(&self, packet: &J1939Packet) -> Result<i16> {
