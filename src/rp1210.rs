@@ -1,5 +1,6 @@
 use crate::multiqueue::*;
 use crate::packet::*;
+use crate::rp1210_parsing;
 use anyhow::*;
 use libloading::os::windows::Symbol as WinSymbol;
 use libloading::*;
@@ -32,6 +33,7 @@ where
 pub struct Rp1210 {
     pub bus: MultiQueue<J1939Packet>,
     api: API,
+    time_stamp_weight: f64,
     pub running: Arc<AtomicBool>,
 }
 struct API {
@@ -151,6 +153,7 @@ impl Rp1210 {
         Ok(Rp1210 {
             api,
             bus,
+            time_stamp_weight: rp1210_parsing::time_stamp_weight(id)?,
             running: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -161,13 +164,17 @@ impl Rp1210 {
         let running = self.running.clone();
         let id = self.api.id;
         let mut bus = self.bus.clone();
+        let time_stamp_weight = self.time_stamp_weight;
         running.store(true, Relaxed);
         std::thread::spawn(move || {
             let mut buf: [u8; PACKET_SIZE] = [0; PACKET_SIZE];
             while running.load(Relaxed) {
                 let size = unsafe { read(id, buf.as_mut_ptr(), PACKET_SIZE as i16, 0) };
                 if size > 0 {
-                    bus.push(J1939Packet::new_rp1210(&buf[0..size as usize]))
+                    bus.push(J1939Packet::new_rp1210(
+                        &buf[0..size as usize],
+                        time_stamp_weight,
+                    ))
                 } else {
                     if size < 0 {
                         // read error

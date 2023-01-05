@@ -202,8 +202,8 @@ fn ping(rp1210: &Rp1210, count: u64, address: u8, pgn: u32, dest: u8) -> Result<
         let mut stream = rp1210.bus.iter_for(Duration::from_secs(2));
         let echo = rp1210.send(&ping)?;
         match stream.find(|p| p.source() == dest && p.pgn() == pgn && p.data()[0] == PING_CMD) {
-            Some(p) => {
-                let time = p.time() - echo.time();
+            Some(pong) => {
+                let time = pong.time() - echo.time();
                 sum += time;
                 if time < min {
                     min = time;
@@ -211,9 +211,9 @@ fn ping(rp1210: &Rp1210, count: u64, address: u8, pgn: u32, dest: u8) -> Result<
                 if time > max {
                     max = time;
                 }
-                eprintln!("{:?}\t{} -> {}", time, echo, p)
+                eprintln!("{:?}\t{} -> {}", time, echo, pong)
             }
-            None => eprintln!("{} no response", ping),
+            None => eprintln!("{} no response", echo),
         }
     }
     println!("Average: {} max: {} min: {}", sum / count as f64, max, min);

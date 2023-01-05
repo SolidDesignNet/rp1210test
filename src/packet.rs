@@ -9,6 +9,7 @@ pub struct Packet {
 pub struct J1939Packet {
     pub packet: Packet,
     pub tx: bool,
+    time_stamp_weight: f64,
 }
 
 impl Display for J1939Packet {
@@ -52,10 +53,11 @@ impl Packet {
 }
 impl J1939Packet {
     #[allow(dead_code)]
-    pub fn new_rp1210(data: &[u8]) -> J1939Packet {
+    pub fn new_rp1210(data: &[u8], time_stamp_weight: f64) -> J1939Packet {
         J1939Packet {
             packet: Packet::new_rp1210(data),
             tx: false,
+            time_stamp_weight,
         }
     }
     pub fn length(&self) -> usize {
@@ -78,6 +80,7 @@ impl J1939Packet {
         J1939Packet {
             packet: Packet::new_rp1210(&buf),
             tx: true,
+            time_stamp_weight: 0.0,
         }
     }
     pub fn time(&self) -> f64 {
@@ -89,9 +92,8 @@ impl J1939Packet {
                 | (0xFF0000 & (self.packet.data[1] as u64) << 16)
                 | (0xFF00 & (self.packet.data[2] as u64) << 8)
                 | (0xFF & (self.packet.data[3] as u64))) as f64
-            // FIXME timestampweight comes from RP1210 INI file.
-            // * self.timestampWeight
-            *0.001
+                * 0.001
+                * self.time_stamp_weight
         }
     }
 

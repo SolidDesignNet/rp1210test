@@ -102,3 +102,10 @@ fn list_devices_for_prod(id: &str) -> Result<(String, Vec<Rp1210Dev>)> {
         .to_string();
     Ok((description, rtn))
 }
+
+pub fn time_stamp_weight(id: &str) -> Result<f64> {
+    let ini = ini::Ini::load_from_file(&format!("c:\\Windows\\{}.ini", id))?;
+    Ok(ini
+        .get_from_or::<&str>(Some("VendorInformation"), "TimeStampWeight", "1")
+        .parse()?)
+}
