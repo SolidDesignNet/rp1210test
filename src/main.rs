@@ -1,20 +1,21 @@
 mod multiqueue;
 mod packet;
+mod rp1210_parsing;
+
 #[cfg_attr(not(target_os = "windows"), path = "sim.rs")]
 #[cfg_attr(target_os = "windows", path = "rp1210.rs")]
 mod rp1210;
-mod rp1210_parsing;
-use std::time::{Duration, SystemTime};
 
 use anyhow::Error;
+use clap::{arg, Parser};
 use multiqueue::*;
 use packet::*;
 use rp1210::*;
+use std::time::{Duration, SystemTime};
 
 const PING_CMD: u8 = 1;
 const RX_CMD: u8 = 2;
 const TX_CMD: u8 = 3;
-use clap::{arg, Parser};
 
 #[derive(Parser, Debug, Default, Clone)]
 struct ConnectionDescriptor {
@@ -42,10 +43,16 @@ fn hex32(str: &str) -> Result<u32, std::num::ParseIntError> {
 }
 
 impl ConnectionDescriptor {
-    fn connect(&self, bus: &MultiQueue<J1939Packet>) -> Result<(Rp1210, Box<dyn Fn()>), Error> {
-        let mut rp1210 = Rp1210::new(&self.adapter, bus.clone())?;
-        let closer = rp1210.run(self.device as i16, &self.connection_string, self.address)?;
-        Ok((rp1210, closer))
+    fn connect(&self, bus: &MultiQueue<J1939Packet>) -> Result<Rp1210, Error> {
+        let mut rp1210 = Rp1210::new(
+            &self.adapter,
+            self.device as i16,
+            &self.connection_string,
+            self.address,
+            bus.clone(),
+        )?;
+        rp1210.run();
+        Ok(rp1210)
     }
 }
 
@@ -121,51 +128,47 @@ pub fn main() -> Result<(), Error> {
             let _connect = connection.connect(&bus);
             log(&bus);
         }
-        RPCommand::Server { connection, pgn } => server(
-            &connection.connect(&bus).unwrap().0,
-            &bus,
-            connection.address,
-            pgn,
-        ),
+        RPCommand::Server { connection, pgn } => {
+            server(&connection.connect(&bus)?, connection.address, pgn)
+        }
         RPCommand::Ping {
             connection,
             dest,
             count,
             pgn,
-        } => ping(
-            &connection.connect(&bus).unwrap().0,
-            &bus,
-            count,
-            connection.address,
-            pgn,
-            dest,
-        )?,
+        } => {
+            ping(
+                &connection.connect(&bus)?,
+                count,
+                connection.address,
+                pgn,
+                dest,
+            )?;
+        }
         RPCommand::Composite {
             connection,
             dest,
             count,
             pgn,
         } => {
-            let rp1210 = connection.connect(&bus).unwrap().0;
-            ping(&rp1210, &bus, count, connection.address, pgn, dest)?;
+            let rp1210 = connection.connect(&bus)?;
+            ping(&rp1210, count, connection.address, pgn, dest)?;
             tx_bandwidth(&rp1210, count, pgn, dest)?;
-            rx_bandwidth(&rp1210, &bus, count, pgn, dest)?
+            rx_bandwidth(&rp1210, count, pgn, dest)?
         }
         RPCommand::Rx {
             connection,
             dest,
             count,
             pgn,
-        } => rx_bandwidth(&connection.connect(&bus).unwrap().0, &bus, count, pgn, dest)?,
+        } => rx_bandwidth(&connection.connect(&bus)?, count, pgn, dest)?,
         RPCommand::Tx {
             connection,
             dest,
             count,
             pgn,
-        } => tx_bandwidth(&connection.connect(&bus).unwrap().0, count, pgn, dest)?,
+        } => tx_bandwidth(&connection.connect(&bus)?, count, pgn, dest)?,
     }
-    // FIXME
-    //    closer();
     Ok(())
 }
 
@@ -176,28 +179,15 @@ fn tx_bandwidth(rp1210: &Rp1210, count: u64, pgn: u32, dest: u8) -> Result<(), E
     Ok(())
 }
 
-fn rx_bandwidth(
-    rp1210: &Rp1210,
-    bus: &MultiQueue<J1939Packet>,
-    count: u64,
-    pgn: u32,
-    dest: u8,
-) -> Result<(), Error> {
-    let rx_packets = bus.iter();
+fn rx_bandwidth(rp1210: &Rp1210, count: u64, pgn: u32, dest: u8) -> Result<(), Error> {
+    let rx_packets = rp1210.bus.iter();
     let request = or([TX_CMD, 0, 0, 0, 0, 0, 0, 0], count);
     rp1210.send(&J1939Packet::new(0x18_FFF1_00 | (dest as u32), &request))?;
     rx(rx_packets, dest, count)?;
     Ok(())
 }
 
-fn ping(
-    rp1210: &Rp1210,
-    bus: &MultiQueue<J1939Packet>,
-    count: u64,
-    address: u8,
-    pgn: u32,
-    dest: u8,
-) -> Result<(), Error> {
+fn ping(rp1210: &Rp1210, count: u64, address: u8, pgn: u32, dest: u8) -> Result<(), Error> {
     const LEN: usize = 8;
     let mut buf = [0 as u8; LEN];
     let mut sum = 0.0;
@@ -209,7 +199,7 @@ fn ping(
         buf[0] = PING_CMD;
 
         let ping = J1939Packet::new_packet(0x18, pgn, dest, address, &buf);
-        let mut stream = bus.iter_for(Duration::from_secs(2));
+        let mut stream = rp1210.bus.iter_for(Duration::from_secs(2));
         let echo = rp1210.send(&ping)?;
         match stream.find(|p| p.source() == dest && p.pgn() == pgn && p.data()[0] == PING_CMD) {
             Some(p) => {
@@ -230,9 +220,11 @@ fn ping(
     Ok(())
 }
 
-fn server(rp1210: &Rp1210, bus: &MultiQueue<J1939Packet>, address: u8, pgn: u32) {
+fn server(rp1210: &Rp1210, address: u8, pgn: u32) {
     println!("SERVER: address: {:02X} pgn: {:04X}", address, pgn);
-    bus.iter()
+    rp1210
+        .bus
+        .iter()
         .filter(|p| p.pgn() == pgn && p.source() != address)
         .for_each(|p| {
             match p.data()[0] {
@@ -253,7 +245,7 @@ fn server(rp1210: &Rp1210, bus: &MultiQueue<J1939Packet>, address: u8, pgn: u32)
                     println!("RX");
                     // receive sequence
                     let count = to_u64(p.data()) & 0xFFFFFF_FFFFFFFF;
-                    let rx_packets = bus.iter();
+                    let rx_packets = rp1210.bus.iter();
                     rx(rx_packets, p.source(), count).unwrap();
                 }
                 TX_CMD => {
