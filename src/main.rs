@@ -16,6 +16,8 @@ use std::time::{Duration, SystemTime};
 const PING_CMD: u8 = 1;
 const RX_CMD: u8 = 2;
 const TX_CMD: u8 = 3;
+const DATA_CMD: u8 = 4;
+const EXIT_CMD: u8 = 5;
 
 #[derive(Parser, Debug, Default, Clone)]
 struct ConnectionDescriptor {
@@ -32,6 +34,9 @@ struct ConnectionDescriptor {
     #[arg(long, default_value = "F9",value_parser=hex8)]
     /// RP1210 Adapter Address (used for packets send and transport protocol)
     address: u8,
+
+    #[arg(long, short, default_value = "false")]
+    verbose: bool,
 }
 
 fn hex8(str: &str) -> Result<u8, std::num::ParseIntError> {
@@ -60,6 +65,15 @@ impl ConnectionDescriptor {
 enum RPCommand {
     /// List available RP1210 adapters
     List,
+    /// request server to exit
+    Exit {
+        #[command(flatten)]
+        connection: ConnectionDescriptor,
+        #[arg(long, default_value = "00",value_parser=hex8)]
+        dest: u8,
+        #[arg(long, default_value = "FFF1",value_parser=hex32)]
+        pgn: u32,
+    },
     /// Log all traffic on specified adapter
     Log {
         #[command(flatten)]
@@ -79,7 +93,7 @@ enum RPCommand {
         #[arg(long, default_value = "00",value_parser=hex8)]
         dest: u8,
         #[arg(short, long, default_value = "10")]
-        count: u64,
+        count: u32,
         #[arg(long, default_value = "FFF1",value_parser=hex32)]
         pgn: u32,
     },
@@ -90,7 +104,7 @@ enum RPCommand {
         #[arg(long, default_value = "00",value_parser=hex8)]
         dest: u8,
         #[arg(short, long, default_value = "10")]
-        count: u64,
+        count: u32,
         #[arg(long, default_value = "FFF1",value_parser=hex32)]
         pgn: u32,
     },
@@ -101,7 +115,7 @@ enum RPCommand {
         #[arg(long, default_value = "00",value_parser=hex8)]
         dest: u8,
         #[arg(short, long)]
-        count: u64,
+        count: u32,
         #[arg(long, default_value = "FFF1",value_parser=hex32)]
         pgn: u32,
     },
@@ -112,7 +126,7 @@ enum RPCommand {
         #[arg(long, default_value = "00",value_parser=hex8)]
         dest: u8,
         #[arg(short, long)]
-        count: u64,
+        count: u32,
         #[arg(long, default_value = "FFF1",value_parser=hex32)]
         pgn: u32,
     },
@@ -124,12 +138,17 @@ pub fn main() -> Result<(), Error> {
     let bus: MultiQueue<J1939Packet> = MultiQueue::new();
     match args {
         RPCommand::List => list_adapters()?,
+        RPCommand::Exit {
+            connection,
+            pgn,
+            dest,
+        } => request_exit(&connection.connect(&bus)?, pgn, dest, connection.address)?,
         RPCommand::Log { connection } => {
-            let _connect = connection.connect(&bus);
+            let _connect = connection.connect(&bus)?;
             log(&bus);
         }
         RPCommand::Server { connection, pgn } => {
-            server(&connection.connect(&bus)?, connection.address, pgn)
+            server(&connection.connect(&bus)?, connection.address, pgn)?;
         }
         RPCommand::Ping {
             connection,
@@ -138,6 +157,7 @@ pub fn main() -> Result<(), Error> {
             pgn,
         } => {
             ping(
+                connection.verbose,
                 &connection.connect(&bus)?,
                 count,
                 connection.address,
@@ -152,46 +172,131 @@ pub fn main() -> Result<(), Error> {
             pgn,
         } => {
             let rp1210 = connection.connect(&bus)?;
-            ping(&rp1210, count, connection.address, pgn, dest)?;
-            tx_bandwidth(&rp1210, count, pgn, dest)?;
-            rx_bandwidth(&rp1210, count, pgn, dest)?
+            ping(
+                connection.verbose,
+                &rp1210,
+                count,
+                connection.address,
+                pgn,
+                dest,
+            )?;
+            tx_bandwidth(
+                connection.verbose,
+                &rp1210,
+                count,
+                connection.address,
+                pgn,
+                dest,
+            )?;
+            rx_bandwidth(
+                connection.verbose,
+                &rp1210,
+                count,
+                connection.address,
+                pgn,
+                dest,
+            )?;
         }
         RPCommand::Rx {
             connection,
             dest,
             count,
             pgn,
-        } => rx_bandwidth(&connection.connect(&bus)?, count, pgn, dest)?,
+        } => {
+            rx_bandwidth(
+                connection.verbose,
+                &connection.connect(&bus)?,
+                count,
+                connection.address,
+                pgn,
+                dest,
+            )?;
+        }
         RPCommand::Tx {
             connection,
             dest,
             count,
             pgn,
-        } => tx_bandwidth(&connection.connect(&bus)?, count, pgn, dest)?,
+        } => {
+            tx_bandwidth(
+                connection.verbose,
+                &connection.connect(&bus)?,
+                count,
+                connection.address,
+                pgn,
+                dest,
+            )?;
+        }
     }
     Ok(())
 }
 
-fn tx_bandwidth(rp1210: &Rp1210, count: u64, pgn: u32, dest: u8) -> Result<(), Error> {
-    let request = or([RX_CMD, 0, 0, 0, 0, 0, 0, 0], count);
-    rp1210.send(&J1939Packet::new(0x18_FFF1_00 | (dest as u32), &request))?;
-    tx(&rp1210, dest, count)?;
+fn request_exit(connection: &Rp1210, pgn: u32, dest: u8, address: u8) -> Result<(), Error> {
+    let request = [EXIT_CMD, 0, 0, 0, 0, 0, 0, 0];
+    let sent = connection.send(&J1939Packet::new_packet(0x18, pgn, address, dest, &request))?;
+    println!("EXIT requested {}", sent);
     Ok(())
 }
 
-fn rx_bandwidth(rp1210: &Rp1210, count: u64, pgn: u32, dest: u8) -> Result<(), Error> {
+fn tx_bandwidth(
+    verbose: bool,
+    rp1210: &Rp1210,
+    count: u32,
+    address: u8,
+    pgn: u32,
+    dest: u8,
+) -> Result<(), Error> {
+    let request: Vec<u8> = [RX_CMD, 0, 0, 0]
+        .into_iter()
+        .chain((count as u32).to_be_bytes().into_iter())
+        .collect();
+    let req = rp1210.send(&J1939Packet::new_packet(0x18, pgn, dest, address, &request))?;
+    let last = tx(verbose, &rp1210, pgn, dest, address, count)?;
+    let time = last.time() - req.time();
+    eprintln!(
+        "tx time: {:8.4} packet/s: {:8.4}",
+        time,
+        1000.0 * count as f64 / time
+    );
+    Ok(())
+}
+
+fn rx_bandwidth(
+    verbose: bool,
+    rp1210: &Rp1210,
+    count: u32,
+    address: u8,
+    pgn: u32,
+    dest: u8,
+) -> Result<(), Error> {
     let rx_packets = rp1210.bus.iter();
-    let request = or([TX_CMD, 0, 0, 0, 0, 0, 0, 0], count);
-    rp1210.send(&J1939Packet::new(0x18_FFF1_00 | (dest as u32), &request))?;
-    rx(rx_packets, dest, count)?;
+    let request: Vec<u8> = [TX_CMD, 0, 0, 0]
+        .into_iter()
+        .chain((count as u32).to_be_bytes().into_iter())
+        .collect();
+    let req = rp1210.send(&J1939Packet::new_packet(0x18, pgn, dest, address, &request))?;
+    let last = rx(verbose, rx_packets, pgn, dest, count)?;
+    let time = last.time() - req.time();
+    eprintln!(
+        "rx time: {:8.4} packet/s: {:8.4}",
+        time,
+        1000.0 * count as f64 / time
+    );
     Ok(())
 }
 
-fn ping(rp1210: &Rp1210, count: u64, address: u8, pgn: u32, dest: u8) -> Result<(), Error> {
+fn ping(
+    verbose: bool,
+    rp1210: &Rp1210,
+    count: u32,
+    address: u8,
+    pgn: u32,
+    dest: u8,
+) -> Result<(), Error> {
     const LEN: usize = 8;
     let mut buf = [0 as u8; LEN];
     let mut sum = 0.0;
-    let mut min = 0.0;
+    let mut min = f64::MAX;
     let mut max = 0.0;
     for i in 1..count {
         let i_as_bytes = i.to_be_bytes();
@@ -211,55 +316,61 @@ fn ping(rp1210: &Rp1210, count: u64, address: u8, pgn: u32, dest: u8) -> Result<
                 if time > max {
                     max = time;
                 }
-                eprintln!("{:?}\t{} -> {}", time, echo, pong)
+                if verbose {
+                    eprintln!("{:8.4}\t{} -> {}", time, echo, pong)
+                }
             }
             None => eprintln!("{} no response", echo),
         }
     }
-    println!("Average: {} max: {} min: {}", sum / count as f64, max, min);
+    println!("ping avg: {:8.4} max: {:8.4} min: {:8.4}", sum / count as f64, max, min);
     Ok(())
 }
 
-fn server(rp1210: &Rp1210, address: u8, pgn: u32) {
+fn server(rp1210: &Rp1210, address: u8, pgn: u32) -> Result<(), Error> {
     println!("SERVER: address: {:02X} pgn: {:04X}", address, pgn);
     rp1210
         .bus
         .iter()
         .filter(|p| p.pgn() == pgn && p.source() != address)
-        .for_each(|p| {
+        .try_for_each(|p| -> Result<(), Error> {
             match p.data()[0] {
                 PING_CMD => {
                     println!("PING: {:02X} {}", p.source(), p);
                     // pong
-                    rp1210
-                        .send(&J1939Packet::new_packet(
-                            0x18,
-                            pgn,
-                            p.source(),
-                            address,
-                            &p.data(),
-                        ))
-                        .unwrap();
+                    rp1210.send(&J1939Packet::new_packet(
+                        0x18,
+                        pgn,
+                        p.source(),
+                        address,
+                        p.data(),
+                    ))?;
                 }
                 RX_CMD => {
-                    println!("RX");
                     // receive sequence
-                    let count = to_u64(p.data()) & 0xFFFFFF_FFFFFFFF;
-                    let rx_packets = rp1210.bus.iter();
-                    rx(rx_packets, p.source(), count).unwrap();
+                    let count = u32::from_be_bytes(p.data()[4..8].try_into()?);
+                    println!("RX {} {}", count, p);
+                    rx(false, rp1210.bus.iter(), pgn, address, count)?;
                 }
                 TX_CMD => {
-                    println!("TX");
                     // send sequence
-                    let count = to_u64(p.data()) & 0xFFFFFF_FFFFFFFF;
-                    tx(&rp1210, p.source(), count).unwrap();
+                    let count = u32::from_be_bytes(p.data()[4..8].try_into()?);
+                    println!("TX {} {}", count, p);
+                    tx(false, rp1210, pgn, address, p.source(), count)?;
+                }
+                DATA_CMD => {}
+                EXIT_CMD => {
+                    println!("EXIT: {:02X} {}", p.source(), p);
+                    std::process::exit(0);
                 }
                 _ => {
                     println!("Unknown command: {}", p);
                 }
-            }
-        });
+            };
+            Ok(())
+        })?;
     eprintln!("Server exited!");
+    Ok(())
 }
 
 fn log(bus: &MultiQueue<J1939Packet>) {
@@ -285,35 +396,52 @@ fn list_adapters() -> Result<(), Error> {
     Ok(())
 }
 
-fn tx(rp1210: &Rp1210, dest: u8, count: u64) -> Result<(), Error> {
-    let head = 0x18_FFF1_00 | (dest as u32);
+/// send sequence of RX, 0, 0, 0, seq:u32
+fn tx(
+    verbose: bool,
+    rp1210: &Rp1210,
+    pgn: u32,
+    address: u8,
+    dest: u8,
+    count: u32,
+) -> Result<J1939Packet, Error> {
+    let mut sent = J1939Packet::default();
     for seq in 0..count {
-        rp1210.send(&J1939Packet::new(head, &or([0; 8], seq)))?;
+        let data: Vec<u8> = [DATA_CMD, 0, 0, 0]
+            .into_iter()
+            .chain(seq.to_be_bytes().into_iter())
+            .collect();
+        sent = rp1210.send(&J1939Packet::new_packet(0x18, pgn, dest, address, &data))?;
+        if verbose {
+            println!("tx: {}", sent);
+        }
     }
-    Ok(())
+    Ok(sent)
 }
 
-fn rx(rx_packets: impl Iterator<Item = J1939Packet>, source: u8, count: u64) -> Result<(), Error> {
+/// receive sequence of RX, 0, 0, 0, seq:u32
+fn rx(
+    verbose: bool,
+    rx_packets: impl Iterator<Item = J1939Packet>,
+    pgn: u32,
+    source: u8,
+    count: u32,
+) -> Result<J1939Packet, Error> {
     let mut seq = 0;
-    rx_packets.filter(|p| p.source() == source).for_each(|p| {
-        let bytes: [u8; 8] = p.data()[0..8].try_into().expect("Not 8 bytes!");
-        let rx_seq = u64::from_be_bytes(bytes) | 0x00FFFFFF_FFFFFFFF;
-        if rx_seq != seq {
-            println!("Invalid seq. expected {} received {}", seq, rx_seq);
-        }
-        seq = rx_seq + 1;
-        if seq >= count {
-            return;
-        }
-    });
-    Ok(())
-}
-
-fn or(data: [u8; 8], value: u64) -> [u8; 8] {
-    (u64::from_be_bytes(data) | value).to_be_bytes()
-}
-
-fn to_u64(data: &[u8]) -> u64 {
-    let u: [u8; 8] = data.try_into().unwrap();
-    u64::from_be_bytes(u)
+    rx_packets
+        .filter(|p| p.source() == source && p.pgn() == pgn && p.data()[0] == DATA_CMD)
+        .take(count as usize)
+        .map(|p| -> Result<J1939Packet, Error> {
+            let rx_seq = u32::from_be_bytes(p.data()[4..8].try_into()?);
+            if rx_seq != seq {
+                println!("Invalid seq. expected {} received {}", seq, rx_seq);
+            }
+            seq = rx_seq + 1;
+            if verbose {
+                println!("rx: {}", p);
+            }
+            Ok(p)
+        })
+        .last()
+        .unwrap()
 }

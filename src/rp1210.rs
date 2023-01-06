@@ -166,6 +166,7 @@ impl Rp1210 {
         let mut bus = self.bus.clone();
         let time_stamp_weight = self.time_stamp_weight;
         running.store(true, Relaxed);
+
         std::thread::spawn(move || {
             let mut buf: [u8; PACKET_SIZE] = [0; PACKET_SIZE];
             while running.load(Relaxed) {
@@ -182,6 +183,7 @@ impl Rp1210 {
                         let size = unsafe { (get_error_fn)(code, buf.as_mut_ptr()) } as usize;
                         let msg = String::from_utf8_lossy(&buf[0..size]).to_string();
                         println!("RP1210 error: {}: {}", code, msg);
+                        std::thread::sleep(Duration::from_secs_f32(0.25))
                     }
                     std::thread::yield_now();
                 }
@@ -195,5 +197,9 @@ impl Rp1210 {
         let send = self.api.send(packet);
         // FIXME needs better error handling
         send.map(|_| stream.find(move |p| p.data() == packet.data()).unwrap())
+    }
+
+    pub fn close(&self) {
+        self.running.store(false, Relaxed)
     }
 }

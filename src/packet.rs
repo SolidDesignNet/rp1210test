@@ -1,11 +1,11 @@
 use std::fmt::*;
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct Packet {
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct J1939Packet {
     pub packet: Packet,
     pub tx: bool,
@@ -67,7 +67,10 @@ impl J1939Packet {
     pub fn new_packet(priority: u8, pgn: u32, da: u8, sa: u8, data: &[u8]) -> J1939Packet {
         let da = if pgn >= 0xF000 { 0 } else { da };
         Self::new(
-            ((priority as u32) << 24) | (pgn << 8) | ((da as u32) << 8) | (sa as u32),
+            ((priority as u32) << 24)
+                | (pgn << 8)
+                | if pgn >= 0xf000 { 0 } else { (da as u32) << 8 }
+                | (sa as u32),
             data,
         )
     }
