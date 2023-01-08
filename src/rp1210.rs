@@ -35,6 +35,9 @@ pub struct Rp1210 {
     api: API,
     time_stamp_weight: f64,
     pub running: Arc<AtomicBool>,
+    pub id: String,
+    pub device: i16,
+    pub connection_string: String,
 }
 struct API {
     id: i16,
@@ -57,13 +60,13 @@ impl API {
         Ok(unsafe {
             let lib = Library::new(id.to_string())?;
             let client_connect: Symbol<ClientConnectType> =
-                (&lib).get(b"RP1210_ClientConnect\0").unwrap();
-            let send: Symbol<SendType> = (&lib).get(b"RP1210_SendMessage\0").unwrap();
-            let send_command: Symbol<CommandType> = (&lib).get(b"RP1210_SendCommand\0").unwrap();
-            let read: Symbol<ReadType> = (&lib).get(b"RP1210_ReadMessage\0").unwrap();
-            let get_error: Symbol<GetErrorType> = (&lib).get(b"RP1210_GetErrorMsg\0").unwrap();
+                lib.get(b"RP1210_ClientConnect\0").unwrap();
+            let send: Symbol<SendType> = lib.get(b"RP1210_SendMessage\0").unwrap();
+            let send_command: Symbol<CommandType> = lib.get(b"RP1210_SendCommand\0").unwrap();
+            let read: Symbol<ReadType> = lib.get(b"RP1210_ReadMessage\0").unwrap();
+            let get_error: Symbol<GetErrorType> = lib.get(b"RP1210_GetErrorMsg\0").unwrap();
             let disconnect: Symbol<ClientDisconnectType> =
-                (&lib).get(b"RP1210_ClientDisconnect\0").unwrap();
+                lib.get(b"RP1210_ClientDisconnect\0").unwrap();
             API {
                 id: 0,
                 client_connect_fn: client_connect.into_raw(),
@@ -87,8 +90,8 @@ impl API {
         Ok(String::from_utf8_lossy(&buf[0..size]).to_string())
     }
     fn verify_return(&self, v: i16) -> Result<i16> {
-        if v < 0 {
-            Err(anyhow!(self.get_error(-v)?))
+        if v < 0 || v > 127 {
+            Err(anyhow!(format!("code: {} msg: {}", v, self.get_error(v)?)))
         } else {
             Ok(v)
         }
@@ -99,9 +102,9 @@ impl API {
         connection_string: &str,
         address: u8,
         app_packetize: bool,
-    ) -> Result<i16> {
+    ) -> Result<()> {
         let c_to_print = CString::new(connection_string).expect("CString::new failed");
-        let id = unsafe {
+        self.id = self.verify_return(unsafe {
             (self.client_connect_fn)(
                 0,
                 dev_id,
@@ -110,8 +113,7 @@ impl API {
                 0,
                 if app_packetize { 1 } else { 0 },
             )
-        };
-        self.id = self.verify_return(id)?;
+        })?;
         if !app_packetize {
             self.send_command(
                 /*CMD_PROTECT_J1939_ADDRESS*/ 19,
@@ -125,7 +127,7 @@ impl API {
             vec![/*ECHO_ON*/ 1],
         )?;
         self.send_command(/*CMD_SET_ALL_FILTERS_STATES_TO_PASS*/ 3, vec![])?;
-        Ok(id)
+        Ok(())
     }
     fn send(&self, packet: &J1939Packet) -> Result<i16> {
         let buf = &packet.packet.data;
@@ -143,18 +145,21 @@ impl Drop for Rp1210 {
 impl Rp1210 {
     pub fn new(
         id: &str,
-        dev: i16,
+        device: i16,
         connection_string: &str,
         address: u8,
         bus: MultiQueue<J1939Packet>,
     ) -> Result<Rp1210> {
         let mut api = API::new(id)?;
-        api.id = api.client_connect(dev, connection_string, address, true)?;
+        api.client_connect(device, connection_string, address, false)?;
         Ok(Rp1210 {
             api,
             bus,
             time_stamp_weight: rp1210_parsing::time_stamp_weight(id)?,
             running: Arc::new(AtomicBool::new(false)),
+            id: id.to_string(),
+            device,
+            connection_string: connection_string.to_string(),
         })
     }
     /// background thread to read all packets into queue
@@ -166,7 +171,7 @@ impl Rp1210 {
         let mut bus = self.bus.clone();
         let time_stamp_weight = self.time_stamp_weight;
         running.store(true, Relaxed);
-
+        let driver = format!("{} {} {}", self.id, self.device, self.connection_string);
         std::thread::spawn(move || {
             let mut buf: [u8; PACKET_SIZE] = [0; PACKET_SIZE];
             while running.load(Relaxed) {
@@ -182,7 +187,7 @@ impl Rp1210 {
                         let code = -size;
                         let size = unsafe { (get_error_fn)(code, buf.as_mut_ptr()) } as usize;
                         let msg = String::from_utf8_lossy(&buf[0..size]).to_string();
-                        println!("RP1210 error: {}: {}", code, msg);
+                        eprintln!("ERROR: {}: {}: {}", driver, code, msg,);
                         std::thread::sleep(Duration::from_secs_f32(0.25))
                     }
                     std::thread::yield_now();
