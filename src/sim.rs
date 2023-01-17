@@ -13,6 +13,7 @@ pub struct Rp1210 {
     pub connection_string: String,
 }
 impl Rp1210 {
+    #[deprecated(note = "Must be built with Win32 target to user RP1210 adapters.")]
     pub fn new(
         _id: &str,
         _device: i16,
@@ -20,7 +21,6 @@ impl Rp1210 {
         _address: u8,
         _bus: MultiQueue<J1939Packet>,
     ) -> Result<Rp1210> {
-        stdext::compile_warning!("RP1210 is only usable on 32 bit Windows.  This compilation will only be usable for unit tests.");
         todo!()
     }
     /// background thread to read all packets into queue

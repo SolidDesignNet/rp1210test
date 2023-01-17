@@ -14,4 +14,3 @@ anyhow = "^1"
 libloading = "^0.7"
 rust-ini="^0.18"
 clap = { version = "4.0.32", features = ["derive"] }
-stdext="0.3.1"
