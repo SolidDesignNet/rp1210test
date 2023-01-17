@@ -1,10 +1,15 @@
 mod multiqueue;
 mod packet;
-mod rp1210_parsing;
-
-#[cfg_attr(not(target_os = "windows"), path = "sim.rs")]
-#[cfg_attr(target_os = "windows", path = "rp1210.rs")]
+#[cfg_attr(
+    not(all(target_pointer_width = "32", target_os = "windows")),
+    path = "sim.rs"
+)]
+#[cfg_attr(
+    all(target_pointer_width = "32", target_os = "windows"),
+    path = "rp1210.rs"
+)]
 mod rp1210;
+mod rp1210_parsing;
 
 use anyhow::Error;
 use clap::{arg, Parser};
@@ -323,7 +328,12 @@ fn ping(
             None => eprintln!("{} no response", echo),
         }
     }
-    println!("ping avg: {:8.4} max: {:8.4} min: {:8.4}", sum / count as f64, max, min);
+    println!(
+        "ping avg: {:8.4} max: {:8.4} min: {:8.4}",
+        sum / count as f64,
+        max,
+        min
+    );
     Ok(())
 }
 
